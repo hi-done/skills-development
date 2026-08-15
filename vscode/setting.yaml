@@ -1,0 +1,52 @@
+{
+    "code-runner.fileDirectoryAsCwd": true,
+    "code-runner.ignoreSelection": true,
+    "code-runner.saveAllFilesBeforeRun": true,
+    "code-runner.saveFileBeforeRun": true,
+    "code-runner.runInTerminal": true,
+    "workbench.editor.empty.hint": "hidden",
+    "Lingma.cloudModelAutoTriggerGenerateLength": "disable",
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "code-runner.clearPreviousOutput": true,
+    "python.terminal.shellIntegration.enabled": false,
+    "workbench.iconTheme": "vscode-icons",
+    "remote.SSH.remotePlatform": {
+        "w1-2605": "linux"
+    },
+    "claudeCode.preferredLocation": "panel",
+
+    // ================= Go 开发设置（性能优先）=================
+    "go.useLanguageServer": true,
+    // 关闭工具自动更新：避免启动时后台联网检查造成卡顿
+    "go.toolsManagement.autoUpdate": false,
+    // 关闭漏洞扫描（govulncheck 会联网 + 高 CPU，卡顿主因之一）
+    // 用扩展自己的 go.diagnostic.vulncheck，不要写进 gopls 里（否则会重复报错）
+    "go.diagnostic.vulncheck": "Off",
+
+    "gopls": {
+        // 语义高亮：保留（现代 gopls 开销很小）；想更流畅可改为 false
+        "ui.semanticTokens": true,
+
+        // --- 诊断：只跑轻量的内置检查 ---
+        // staticcheck 很耗 CPU，关掉后仍保留 go vet 的基础检查
+        "ui.diagnostic.staticcheck": false,
+        // 输入后延迟多久再算深度诊断，默认 1s；大项目可调到 "1.5s" / "2s"
+        "ui.diagnostic.diagnosticsDelay": "1s",
+        // 关闭建立分析索引时的进度通知
+        "ui.diagnostic.analysisProgressReporting": false,
+
+        // --- 补全：关掉耗资源的深度补全 ---
+        "ui.completion.usePlaceholders": false,
+        "ui.completion.completeFunctionCalls": false,
+        "ui.completion.experimentalPostfixCompletions": false,
+
+        // --- CodeLens：关掉耗资源的项 ---
+        "ui.codelenses": {
+            "run_govulncheck": false,
+            "upgrade_dependency": false,
+            "tidy": false
+        }
+    },
+    "terminal.integrated.initialHint": false,
+    "workbench.editor.wrapTabs": true
+}
