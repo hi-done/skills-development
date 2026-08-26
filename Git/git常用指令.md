@@ -36,6 +36,8 @@ git remote set-url origin git@github.com-hi-done:hi-done/clog.git && git remote 
 git tag v1.0.1
 git push --follow-tags
 
+推单个 tag
+git push origin v1.0.2
 ## git clone 代理
 https_proxy=http://10.0.2.2:7890 git clone https://github.com/i-cooltea/db-taxi.git
 git clone -c http.proxy=http://127.0.0.1:7890 https://github.com/i-cooltea/db-taxi.git
