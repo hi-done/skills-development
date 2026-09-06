@@ -39,21 +39,24 @@ git push --follow-tags
 推单个 tag
 git push origin v1.0.2
 ## git clone 代理
-https_proxy=http://10.0.2.2:7890 git clone https://github.com/i-cooltea/db-taxi.git
+### 临时使用
 git clone -c http.proxy=http://127.0.0.1:7890 https://github.com/i-cooltea/db-taxi.git
 
+linux环境
+https_proxy=http://10.0.2.2:7890 git clone https://github.com/i-cooltea/db-taxi.git
 https_proxy=http://10.0.2.2:7890 git clone https://github.com/googleapis/googleapis
 
-永久设置
+windows环境
+$env:all_proxy="http://127.0.0.1:7890"; git clone https://github.com/i-cooltea/db-taxi.git
+$env:https_proxy="http://127.0.0.1:7890"; git clone https://github.com/i-cooltea/db-taxi.git
+
+### 永久设置
 git config --global http.proxy http://127.0.0.1:7890
 git config --global https.proxy http://127.0.0.1:7890
 
-$env:all_proxy="http://127.0.0.1:7890"; git clone https://github.com/i-cooltea/db-taxi.git
 
-$env:https_proxy="http://127.0.0.1:7890"; git clone https://github.com/i-cooltea/db-taxi.git
-
+只针对github
 git config --global http.https://github.com.proxy "http://127.0.0.1:7890"
-
 git config --global http.https://github.com.proxy "socks5://127.0.0.1:7890"
 
 
