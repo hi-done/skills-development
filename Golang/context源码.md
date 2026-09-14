@@ -142,8 +142,8 @@ func init() {
 	close(closedchan)
 }
 
-// 从父 context 中找出「真正的、可安全挂载 子cancelCtx 的那个底层 *cancelCtx」，同时防止绕过用户自定义的 Done() 实现。
-// 从而实现安全级联cancel
+// 从 传入的context 的 Value 链中，找到*cancelCtx，并且校验 *cancelCtx 的 done channel 等于 传入的context 的 done channel
+// 返回 *cancelCtx 及 校验结果。该 *cancelCtx 可安全挂载 子 context，实现级联cancel
 func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	done := parent.Done() // 先拿到父 context 的 done channel
 	if done == closedchan || done == nil {
@@ -157,7 +157,7 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	}
 	pdone, _ := p.done.Load().(chan struct{})
 	if pdone != done {
-		return nil, false
+		return nil, false // 防止绕过用户自定义的 Done() 实现。
 	} // 核心校验：父 context 的 done channel 和找到的 cancelCtx 的 pdone channel是否一致
     // 如果不一致 → 说明被包装/篡改过(不安全) → 不信任它 → 返回 false，例如：
     // type myCtx struct {
@@ -175,17 +175,20 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 }
 
 // 从 父 Context 的底层 *cancelCtx 的列表中 删除 自身
+// 要知道，removeChild只会在Context包中被调用
+// (c *cancelCtx) cancel、(c *timerCtx) cancel、(a *afterFuncCtx) cancel
+// 并且使用时是 parent 为 child.Context
+// 因此不会存在拿一个与parent无关的child 来 remove
 func removeChild(parent Context, child canceler) {
 	if s, ok := parent.(stopCtx); ok {
-		s.stop() // 取消所有子节点，并清空 children
-        // stopCtx 是一个“绕过 parentCancelCtx 校验、直接操作内部 cancelCtx”的逃生通道
-        // 更底层、更直接、不依赖 Done() 一致性
-        // 只要父 context 在内部实现了 stop()，就直接用最快的方式断开关系，不需要走 Value 查找 + 一致性校验
+		s.stop() 
+		// 在 propagateCancel中，当用户自定义了 Done()方法，则会为child c 生成stopCtx的parent, c.Context = stopCtx
+		// stop()会将child的cancel方法从parent的取消方法的map中delete
 		return
 	}
 	p, ok := parentCancelCtx(parent)
 	if !ok {
-		return
+		return // 如果 parent 的 Value 链中没有*cancelCtx，直接返回
 	}
 	p.mu.Lock()
 	if p.children != nil {
@@ -519,16 +522,17 @@ type afterFuncer interface {
 
 type afterFuncCtx struct {
 	cancelCtx
-	once sync.Once // either starts running f or stops f from running
-	f    func()
+	once sync.Once
+	f    func() // 在cancel中使用，且在调用stop时不使用，借由 once 实现
 }
 
 func (a *afterFuncCtx) cancel(removeFromParent bool, err, cause error) {
 	a.cancelCtx.cancel(false, err, cause)
 	if removeFromParent {
-		removeChild(a.Context, a) // 子 context 和 afterFuncCtx 的关系不是通过 children map 维护的，
-        // 而是通过 AfterFunc 回调。
-	}
+		removeChild(a.Context, a) // 与 removeChild(a.cancelCtx.Context, a) 等价
+		// 不直接使用 a.cancelCtx.cancel(true, err, cause) 
+		// 是因为 a.Context 的 *cancelCtx 中 的 children map 里，key 是 a，而非a.cancelCtx
+		// 正如此，若 a.Context 被 cancel，才会级联调用 a.cancel()，从而触发 a.f()
 	a.once.Do(func() {
 		go a.f() // 开协程防止其他人调用cancel()被阻塞
 	})
@@ -537,10 +541,14 @@ func (a *afterFuncCtx) cancel(removeFromParent bool, err, cause error) {
 
 ```go
 // 将 child注册到parent中
+// 当 创建 WithCancel、WithDeadline等时会在内部调用，且 child 就是 c: c.propagateCancel(parent, c)
+// 或者是cancelCtx的上一级: a.cancelCtx.propagateCancel(parent, a)
 func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 	c.Context = parent
 
 	done := parent.Done()
+
+	// 情况一
 	if done == nil {
 		return // parent is never canceled
 	} // 若 parent 为 context.Background() / 永不取消的 context 
@@ -554,11 +562,12 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 	default:
 	}
 
+	// 情况二
 	if p, ok := parentCancelCtx(parent); ok {
 		// parent is a *cancelCtx, or derives from one.
 		p.mu.Lock()
 		if err := p.err.Load(); err != nil {
-			// parent has already been canceled
+			// 如果 parent context 的 *cancelCtx 已被取消，则将 child 也取消
 			child.cancel(false, err.(error), p.cause)
 		} else {
 			if p.children == nil {
@@ -571,9 +580,15 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
         // 把 child 注册进 p.children map
 	}
 
-    // 如果有人写了自己的 context 类型，并且知道如何高效注册"取消时回调"
-    // （比如它不是基于 Done() channel、没法 select 的实现），
-    // 就可以暴露 AfterFunc(func()) func() bool 方法，
+	// 情况三
+	// 当 parent 有 Done()返回 非nil channel，且未关闭，且无cancelCtx 或 自定义了Done() （非cancelCtx 自带的Done()）
+	// 其实，一定实现了自定义的Done()，因为若无cancelCtx，则一定有Done()，若有cancelCtx，则也一定有Done()，否则就返回了cancelCtx，直接走上面的逻辑
+	// 所以，总结就是实现了自定义的Done()，且channel未关闭
+    // 此时无法通过parentCancelCtx获取parent上可挂在的cancelCtx
+
+
+    // 若 parent 实现了 AfterFunc(func()) func() bool 方法，现用户想根据该context 通过 
+	// WithCancel、WithDeadline等派生可级联cancel 的 子context
     // propagateCancel 就会用它，而不是走最后的兜底逻辑
 	if a, ok := parent.(afterFuncer); ok {
 		// parent implements an AfterFunc method.
@@ -581,14 +596,25 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 		stop := a.AfterFunc(func() {
 			child.cancel(false, parent.Err(), Cause(parent))
 		})
+		// AfterFunc中会将child.cancel(false, parent.Err(), Cause(parent))注册到
+		// afterFuncs map[*byte]func()
+		// 调用时会从 afterFuncs 中 delete 该 child.cancel
 		c.Context = stopCtx{
 			Context: parent,
 			stop:    stop,
 		}
+		// 此时c 的parent context就是 stopCtx，会应用到后续的removeChild
+		// 目的是在parent 取消时，能够触发child.cancel(false, parent.Err(), Cause(parent))，
+		// 而主动调用 stop()时，不会触发child.cancel(false, parent.Err(), Cause(parent))，
+		// 只会将 AfterFunc 潜在生成的 afterFuncs 中 delete 该 child.cancel
+		// 既如此，stopCtx (c.Context) 只会影响一个 child
+		// 但 parent 能过够 挂载多个 child，实现级联取消 
 		c.mu.Unlock()
 		return
 	}
 
+	// 情况四
+	// 以上均不成功，走起线程监听parent.Done，以调用child.cancel
 	goroutines.Add(1)
 	go func() {
 		select {
@@ -599,6 +625,8 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 	}()
 ```
 
+// 把一个函数f()关联Context，目的是当该Context取消时，会触发f()
+// 但 当调用stop函数时，则终止在Context取消时对于f()的触发
 ```go
 func AfterFunc(ctx Context, f func()) (stop func() bool) {
 	a := &afterFuncCtx{
@@ -611,9 +639,59 @@ func AfterFunc(ctx Context, f func()) (stop func() bool) {
 			stopped = true
 		})
 		if stopped {
-			a.cancel(true, Canceled, nil)
+			a.cancel(true, Canceled, nil) // 此时不会调用 a.f()，即调用stop方法不会触发a.f()，只会在a自身cancel时触发
 		}
 		return stopped
 	}
+}
+```
+
+---
+
+propagateCancel 的情况三
+
+**实现 `afterFuncer` 的场景 = 你的取消源不在标准 context 树里，但你希望下游能用标准 context API 派生和响应。** 如果取消源本身已经是 context，直接 `WithCancel` 即可，不需要自定义。
+
+```go
+type afterFuncContext struct {
+	mu         sync.Mutex
+	afterFuncs map[*byte]func()   // 注册表：唯一指针做 key
+	done       chan struct{}
+	err        error
+}
+
+func (c *afterFuncContext) AfterFunc(f func()) func() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {                    // 已取消：契约要求立即（在自己 goroutine 里）执行
+		c.mu.Unlock()
+		go f()
+		return func() bool { return false }
+	}
+	k := new(byte)                      // 每次注册一个唯一 key → 多次注册相互独立
+	if c.afterFuncs == nil {
+		c.afterFuncs = make(map[*byte]func())
+	}
+	c.afterFuncs[k] = f                 // 只注册，不执行
+	return func() bool {                // ← 这个闭包就是 stopCtx.stop
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.afterFuncs[k]         // 已被取消(map=nil)或已 stop → ok=false
+		delete(c.afterFuncs, k)          // 真正的"注销"动作
+		return ok                        // true=本次调用阻止了 f 运行
+	}
+}
+
+func (c *afterFuncContext) cancel(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	for _, f := range c.afterFuncs {
+		go f()                           // 关键：永远在自己的 goroutine 里调 f
+	}
+	c.afterFuncs = nil
 }
 ```
