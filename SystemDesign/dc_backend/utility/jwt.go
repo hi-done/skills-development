@@ -1,6 +1,7 @@
 package utility
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -14,6 +15,12 @@ var (
 	ErrTokenInvalid = errors.New("token invalid")
 )
 
+// 默认有效期，可通过配置文件 jwt.access_expire / jwt.refresh_expire 调整
+const (
+	defaultAccessTokenExpire  = 3 * time.Minute
+	defaultRefreshTokenExpire = 7 * 24 * time.Hour
+)
+
 type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
@@ -22,17 +29,17 @@ type Claims struct {
 
 // GenerateAccessToken 生成 Access Token
 func GenerateAccessToken(userID int64, username string) (string, error) {
+	ctx := gctx.New()
 	claims := Claims{
 		UserID:   userID,
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(3 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpire(ctx, "jwt.access_expire", defaultAccessTokenExpire))),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	ctx := gctx.New()
 	as, _ := g.Cfg().Get(ctx, "jwt.access_secret")
 	return token.SignedString([]byte(as.String()))
 }
@@ -60,15 +67,17 @@ func ParseAccessToken(tokenStr string) (*Claims, error) {
 }
 
 // GenerateRefreshToken 生成 Refresh Token
-func GenerateRefreshToken() (string, error) {
+func GenerateRefreshToken(userID int64, username string) (string, error) {
+	ctx := gctx.New()
 	claims := Claims{
+		UserID:   userID,
+		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpire(ctx, "jwt.refresh_expire", defaultRefreshTokenExpire))),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	ctx := gctx.New()
 	rs, _ := g.Cfg().Get(ctx, "jwt.refresh_secret")
 	return token.SignedString([]byte(rs.String()))
 }
@@ -93,4 +102,18 @@ func ParseRefreshToken(tokenStr string) (*Claims, error) {
 	}
 
 	return nil, ErrTokenInvalid
+}
+
+// RefreshTokenExpire 返回 Refresh Token 有效期，供刷新时同步 Redis TTL
+func RefreshTokenExpire(ctx context.Context) time.Duration {
+	return tokenExpire(ctx, "jwt.refresh_expire", defaultRefreshTokenExpire)
+}
+
+// tokenExpire 读取指定配置项作为有效期，配置缺失或无效时回退默认值
+func tokenExpire(ctx context.Context, configKey string, def time.Duration) time.Duration {
+	expire := g.Cfg().MustGet(ctx, configKey, def).Duration()
+	if expire <= 0 {
+		return def
+	}
+	return expire
 }

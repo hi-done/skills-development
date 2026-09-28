@@ -5,5 +5,6 @@
 package logic
 
 import (
+	_ "dc_backend/internal/logic/middleware"
 	_ "dc_backend/internal/logic/user"
 )

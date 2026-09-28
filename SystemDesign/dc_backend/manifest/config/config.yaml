@@ -22,3 +22,6 @@ redis:
 jwt:
   access_secret: "12345qwert"
   refresh_secret: "qwert12345"
+  # Token 有效期，支持 s/m/h/d 单位
+  access_expire: "3m"
+  refresh_expire: "7d"
