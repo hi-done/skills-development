@@ -1,0 +1,24 @@
+# https://goframe.org/docs/web/server-config-file-template
+server:
+  address:     ":8000"
+  openapiPath: "/api.json"
+  swaggerPath: "/swagger"
+
+# https://goframe.org/docs/core/glog-config
+logger:
+  level : "all"
+  stdout: true
+
+# https://goframe.org/docs/core/gdb-config-file
+database:
+  default:
+    link: "mysql:root:123456@tcp(192.168.56.101:3306)/dc_dev"
+
+redis:
+  default:
+    address: 192.168.56.101:6379
+    db:      1
+
+jwt:
+  access_secret: "12345qwert"
+  refresh_secret: "qwert12345"
