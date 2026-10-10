@@ -61,6 +61,37 @@ git config --global http.https://github.com.proxy "socks5://127.0.0.1:7890"
 
 git config --global --unset core.sshCommand
 
+## 配置查看
+```bash
+git config --list
+git config --global --list
+git config --local --list
 
+git config user.name
+git config user.email
+git config core.editor
+```
+- core.editor - 默认编辑器
+- core.autocrlf - 换行符处理
+- remote.origin.url - 远程仓库地址
+- alias.* - 自定义命令别名
 
+### 设置配置
+```bash
+git config [<scope>] <key> <value>
+```
 
+### 删除配置
+```bash
+git config [<scope>] --unset <key>
+git config [<scope>] --unset-all <key>   # 删除该 key 下的所有值（用于多值配置）
+
+# 删除当前仓库的 user.email 配置
+git config --unset user.email
+
+# 删除全局的 user.name 配置
+git config --global --unset user.name
+
+# 删除某个远程仓库的所有 fetch 引用（多值情况）
+git config --unset-all remote.origin.fetch
+```
